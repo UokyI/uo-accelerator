@@ -52,7 +52,7 @@ func main() {
 	seedRouteTable(routeTable, cfg.Domains)
 
 	// 启动代理
-	proxy := NewProxyServer(cfg.Listen, routeTable, prefixRouter)
+	proxy := NewProxyServer(cfg.Listen, routeTable, prefixRouter, resolver)
 	go func() {
 		if err := proxy.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "[proxy] 启动失败: %v\n", err)

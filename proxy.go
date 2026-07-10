@@ -106,16 +106,18 @@ type ProxyServer struct {
 	addr         string
 	routeTable   *RouteTable
 	prefixRouter *PrefixRouter
+	resolver      *Resolver // 实时 DoH 解析，路由表 IP 全挂时兜底
 	server       *http.Server
 	transport    *http.Transport
 }
 
 // NewProxyServer 创建代理服务器
-func NewProxyServer(addr string, routeTable *RouteTable, prefixRouter *PrefixRouter) *ProxyServer {
+func NewProxyServer(addr string, routeTable *RouteTable, prefixRouter *PrefixRouter, resolver *Resolver) *ProxyServer {
 	ps := &ProxyServer{
 		addr:         addr,
 		routeTable:   routeTable,
 		prefixRouter: prefixRouter,
+		resolver:      resolver,
 	}
 
 	ps.transport = &http.Transport{
@@ -193,6 +195,24 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 			// 连接成功，直接复用，不 close 再重拨
 			ps.tunnelConn(w, destConn)
 			return
+		}
+		// 路由表全部失败，尝试实时 DoH 解析拿新 IP（不同地域可能解析到不同 IP）
+		if ps.resolver != nil {
+			fmt.Printf("[proxy] %s → 路由表全部失败，尝试 DoH 实时解析...\n", host)
+			freshIPs, err := ps.resolver.Resolve(host)
+			if err == nil && len(freshIPs) > 0 {
+				for _, ip := range freshIPs {
+					targetAddr := net.JoinHostPort(ip, "443")
+					fmt.Printf("[proxy] %s → 尝试 %s (DoH实时, 5s)\n", host, ip)
+					destConn, err := net.DialTimeout("tcp", targetAddr, 5*time.Second)
+					if err != nil {
+						fmt.Printf("[proxy] %s → %s 失败: %v\n", host, ip, err)
+						continue
+					}
+					ps.tunnelConn(w, destConn)
+					return
+				}
+			}
 		}
 		fmt.Printf("[proxy] %s → 所有IP均失败\n", host)
 		http.Error(w, "Bad Gateway: all IPs failed", http.StatusBadGateway)
