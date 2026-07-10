@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -15,8 +16,18 @@ import (
 var probing int32
 
 func main() {
-	configPath := flag.String("c", "config.yaml", "配置文件路径")
+	configPath := flag.String("c", "", "配置文件路径（默认 exe 所在目录下的 config.yaml）")
 	flag.Parse()
+
+	// 默认在 exe 自身所在目录找 config.yaml，支持双击启动
+	if *configPath == "" {
+		exeDir, _ := os.Executable()
+		if exePath, err := os.Readlink(exeDir); err == nil {
+			exeDir = exePath
+		}
+		defaultCfg := filepath.Join(filepath.Dir(exeDir), "config.yaml")
+		configPath = &defaultCfg
+	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
 	fmt.Println("║        GitHub Accelerator v1.0               ║")
@@ -27,7 +38,7 @@ func main() {
 	cfg, err := LoadConfig(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[error] %v\n", err)
-		os.Exit(1)
+		pauseExit(1)
 	}
 	fmt.Printf("[config] 配置加载成功 (监听 %s)\n", cfg.Listen)
 
@@ -45,7 +56,7 @@ func main() {
 	go func() {
 		if err := proxy.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "[proxy] 启动失败: %v\n", err)
-			os.Exit(1)
+			pauseExit(1)
 		}
 	}()
 	time.Sleep(300 * time.Millisecond)
@@ -263,4 +274,11 @@ func seedRouteTable(rt *RouteTable, domains []string) {
 		}
 	}
 	Logf("[startup] 已为 %d 个域名预加载兜底路由", len(domains))
+}
+
+// pauseExit 打印错误并等待按键后退出（双击 exe 时能看到错误信息）
+func pauseExit(code int) {
+	fmt.Fprintf(os.Stderr, "\n[error] 按 Enter 键退出...")
+	fmt.Scanln()
+	os.Exit(code)
 }

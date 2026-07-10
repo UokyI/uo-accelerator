@@ -175,11 +175,16 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// 只有 GitHub 域名才走路由（多IP遍历），其余全部直连
 	if ps.routeTable.IsGitHubDomain(host) {
-		for _, ip := range ps.routeTable.GetAllCandidates(host) {
+		// 第一个 IP 用完整超时，后续快速失败（网络环境差时不必逐个等 10s）
+		for i, ip := range ps.routeTable.GetAllCandidates(host) {
+			timeout := 10 * time.Second
+			if i > 0 {
+				timeout = 3 * time.Second
+			}
 			targetAddr := net.JoinHostPort(ip, "443")
-			fmt.Printf("[proxy] %s → 尝试 %s\n", host, ip)
+			fmt.Printf("[proxy] %s → 尝试 %s (%v)\n", host, ip, timeout)
 
-			destConn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
+			destConn, err := net.DialTimeout("tcp", targetAddr, timeout)
 			if err != nil {
 				fmt.Printf("[proxy] %s → %s 失败: %v\n", host, ip, err)
 				continue

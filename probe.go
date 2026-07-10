@@ -44,6 +44,9 @@ func NewProber(timeout time.Duration, probePaths []string) *Prober {
 	}
 }
 
+// maxProbeConcurrency 探测最大并发数（避免挤占正常代理请求的端口）
+const maxProbeConcurrency = 10
+
 // ProbeIPs 并发探测所有候选 IP，返回按评分排序的结果
 func (p *Prober) ProbeIPs(domain string, ips []string, topN int) []ProbeCandidate {
 	if len(ips) == 0 {
@@ -52,11 +55,15 @@ func (p *Prober) ProbeIPs(domain string, ips []string, topN int) []ProbeCandidat
 
 	results := make(chan ProbeCandidate, len(ips))
 	var wg sync.WaitGroup
+	sema := make(chan struct{}, maxProbeConcurrency)
 
 	for _, ip := range ips {
 		wg.Add(1)
 		go func(ip string) {
 			defer wg.Done()
+			sema <- struct{}{}        // 获取令牌
+			defer func() { <-sema }() // 释放令牌
+
 			candidate := p.probeSingle(domain, ip)
 			if candidate != nil {
 				results <- *candidate
@@ -204,16 +211,23 @@ func (p *Prober) httpsThroughput(domain string, ip string) float64 {
 	return bestThroughput
 }
 
-// ProbeAll 并发探测所有域名的 IP
+// maxDomainProbeConcurrency 同时探测的最大域名数
+const maxDomainProbeConcurrency = 3
+
+// ProbeAll 并发探测所有域名的 IP（限制并发避免挤占正常代理端口）
 func (p *Prober) ProbeAll(resolved map[string][]string, topN int) map[string][]ProbeCandidate {
 	result := make(map[string][]ProbeCandidate)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	sema := make(chan struct{}, maxDomainProbeConcurrency)
 
 	for domain, ips := range resolved {
 		wg.Add(1)
 		go func(d string, ipList []string) {
 			defer wg.Done()
+			sema <- struct{}{}        // 获取令牌
+			defer func() { <-sema }() // 释放令牌
+
 			candidates := p.ProbeIPs(d, ipList, topN)
 			if len(candidates) > 0 {
 				mu.Lock()
