@@ -22,12 +22,10 @@ jobs:
           go-version: '1.22'
 
       - name: 编译
-        working-directory: uo-accelerator
         run: go build -ldflags="-s -w" -o uo-accelerator.exe .
 
       - name: 组装发布包
         shell: pwsh
-        working-directory: uo-accelerator
         run: |
           New-Item -ItemType Directory release -Force | Out-Null
           Copy-Item uo-accelerator.exe release\
@@ -37,5 +35,5 @@ jobs:
       - name: 创建 Release 并上传产物
         uses: softprops/action-gh-release@v2
         with:
-          files: uo-accelerator/uo-accelerator_${{ github.ref_name }}.zip
+          files: uo-accelerator_${{ github.ref_name }}.zip
           generate_release_notes: true
