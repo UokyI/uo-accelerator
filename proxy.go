@@ -173,17 +173,20 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 检查是否为 GitHub 域名（遍历候选IP，失败自动换下一个）
-	if allIPs := ps.routeTable.GetAllCandidates(host); len(allIPs) > 0 {
-		for _, ip := range allIPs {
+	// 只有 GitHub 域名才走路由（多IP遍历），其余全部直连
+	if ps.routeTable.IsGitHubDomain(host) {
+		for _, ip := range ps.routeTable.GetAllCandidates(host) {
+			targetAddr := net.JoinHostPort(ip, "443")
 			fmt.Printf("[proxy] %s → 尝试 %s\n", host, ip)
-			destConn, err := net.DialTimeout("tcp", net.JoinHostPort(ip, "443"), 5*time.Second)
+
+			destConn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
 			if err != nil {
 				fmt.Printf("[proxy] %s → %s 失败: %v\n", host, ip, err)
 				continue
 			}
-			destConn.Close()
-			ps.handleConnectToIP(w, net.JoinHostPort(ip, "443"))
+
+			// 连接成功，直接复用，不 close 再重拨
+			ps.tunnelConn(w, destConn)
 			return
 		}
 		fmt.Printf("[proxy] %s → 所有IP均失败\n", host)
@@ -193,17 +196,16 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// 非 GitHub 域名：直连
 	fmt.Printf("[proxy] %s → 直连\n", host)
-	ps.handleConnectToIP(w, hostPort)
-}
-
-// handleConnectToIP 建立到指定地址的 CONNECT 隧道
-func (ps *ProxyServer) handleConnectToIP(w http.ResponseWriter, targetAddr string) {
-	destConn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
+	destConn, err := net.DialTimeout("tcp", hostPort, 10*time.Second)
 	if err != nil {
-		fmt.Printf("[proxy] TCP失败 %s: %v\n", targetAddr, err)
 		http.Error(w, "Bad Gateway: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	ps.tunnelConn(w, destConn)
+}
+
+// tunnelConn 将已建立的连接 Hijack 为 CONNECT 隧道（一次拨号即用，不浪费端口）
+func (ps *ProxyServer) tunnelConn(w http.ResponseWriter, destConn net.Conn) {
 	defer destConn.Close()
 
 	hijacker, ok := w.(http.Hijacker)

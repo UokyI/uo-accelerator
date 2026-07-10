@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -123,6 +124,10 @@ func (p *Prober) tcpConnect(ip string) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
+	// 设置 Linger=0，关闭时发 RST 跳过 TIME_WAIT，不浪费临时端口
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		tcp.SetLinger(0)
+	}
 	conn.Close()
 
 	return time.Since(start), nil
@@ -137,7 +142,18 @@ func (p *Prober) httpsThroughput(domain string, ip string) float64 {
 			ServerName:         domain, // 正确的 SNI
 			InsecureSkipVerify: true,   // 跳过证书校验（测速不需要严格验证）
 		},
-		DialContext: (&net.Dialer{Timeout: p.timeout}).DialContext,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			d := net.Dialer{Timeout: p.timeout}
+			conn, err := d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			// 关闭时发 RST 跳过 TIME_WAIT
+			if tcp, ok := conn.(*net.TCPConn); ok {
+				tcp.SetLinger(0)
+			}
+			return conn, nil
+		},
 	}
 	client := &http.Client{
 		Transport: transport,
